@@ -1,0 +1,6 @@
+META:
+  split: train
+  libero_task_suite: libero_goal
+  raw_data_dir: '../processed_data/libero_goal_no_noops_t_256'
+world_model:
+  his: 1

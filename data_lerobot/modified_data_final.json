@@ -1,0 +1,28 @@
+{
+    "task_data": {
+        "place_roll_new": {
+            "instructions": [
+                "Place the block inside the circle."
+            ],
+            "data_path": [
+                "/mnt/damorobot/cenjun/lerobot_data/so100_Pick-up-all-the-blocks-one-by-one-with-tweezers-and-put-them-in-the-roll/episode_000000.hdf5"
+            ]
+        },
+        "strawberry_pickup": {
+            "instructions": [
+                "Place the strawberries from the table into the cup."
+            ],
+            "data_path": [
+                "/mnt/damorobot/cenjun/lerobot_data/so100_Pick-up-the-strawberries-and-put-them-in-the-cup/episode_000000.hdf5"
+            ]
+        },
+        "straight_holder_grab_pen": {
+            "instructions": [
+                "Pick up the holder and place it straight then pick up the pen and place it in the holder"
+            ],
+            "data_path": [
+                "/mnt/damorobot/cenjun/lerobot_data/so100_Pick-up-the-holder-and-place-it-straight-then-pick-up-the-pen-and-place-it-in-the-holder-complete/episode_000000.hdf5"
+            ]
+        }
+    }
+}
