@@ -226,14 +226,36 @@ class GoTSolverV2(PretrainSolverBase):
                 tokenizer=args.tokenizer_path,
             ) if args.score_fn == "world_model" else item_processor
 
-            got_pipeline = GoTVLAPipeline(
-                model=self.model,
-                item_processor=item_processor,
-                cfg=got_cfg,
-                world_model=self.world_model,
-                device=DEVICE,
-                wm_item_processor=wm_item_processor,
-            )
+            if getattr(args, "got_version", "v1") == "v2":
+                from got_vla_v2.got_pipeline_v2 import GoTVLAPipelineV2, GoTConfig as GoTConfigV2
+                cfg_v2 = GoTConfigV2(
+                    n_segments=args.n_segments,
+                    segment_len=args.segment_len,
+                    k_candidates=args.k_candidates,
+                    beam_width=getattr(args, "beam_width", 2),
+                    action_steps=args.action_steps,
+                    his_type=args.his,
+                    score_fn=args.score_fn,
+                    fd_n_lookahead=args.fd_n_lookahead,
+                    verbose=True,
+                )
+                got_pipeline = GoTVLAPipelineV2(
+                    model=self.model,
+                    item_processor=item_processor,
+                    cfg=cfg_v2,
+                    device=DEVICE,
+                    world_model=self.model if args.score_fn == "world_model" else None,
+                    wm_item_processor=wm_item_processor,
+                )
+            else:
+                got_pipeline = GoTVLAPipeline(
+                    model=self.model,
+                    item_processor=item_processor,
+                    cfg=got_cfg,
+                    world_model=self.world_model,
+                    device=DEVICE,
+                    wm_item_processor=wm_item_processor,
+                )
         else:
             got_pipeline = None
 
