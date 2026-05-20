@@ -111,6 +111,11 @@ class GoTSolverV2(PretrainSolverBase):
                             choices=["got", "bon", "baseline"])
         parser.add_argument("--score_fn", type=str, default="forward_dynamics",
                             choices=["heuristic", "forward_dynamics", "world_model"])
+        parser.add_argument("--got_version", type=str, default="v1",
+                            choices=["v1", "v2"],
+                            help="v1: ToT 방식, v2: GoT beam search 방식")
+        parser.add_argument("--beam_width", type=int, default=2,
+                            help="GoT v2: 유지할 경로 수")
         parser.add_argument("--n_segments", type=int, default=3)
         parser.add_argument("--segment_len", type=int, default=4)
         parser.add_argument("--k_candidates", type=int, default=3)
