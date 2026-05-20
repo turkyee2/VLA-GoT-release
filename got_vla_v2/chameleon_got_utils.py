@@ -127,11 +127,16 @@ def get_action_for_got(
         tokens = item_processor.process_item(conv, training_mode=False)
 
         # Generation config — temperature / top_k only active when do_sample=True
+        # Temperature만 사용, top_k 제거
+        # - do_sample=False (i=0): greedy, exploitation
+        # - do_sample=True  (i>0): temperature로 다양성 조절
+        # - temperature 범위 0~1.5, top_k는 temperature와 중복이므로 제거
         generation_config = GenerationConfig(
             max_new_tokens=action_steps * 12,
             max_length=model.config.max_position_embeddings,
             temperature=temperature if do_sample else 1.0,
-            top_k=50 if do_sample else None,
+            top_k=None,
+            top_p=0.95 if do_sample else None,
             do_sample=do_sample,
             eos_token_id=[8710],
         )

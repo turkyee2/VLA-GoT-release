@@ -80,6 +80,10 @@ class GoTVLAPipelineV2:
         results = []
         for i in range(k):
             try:
+                # 후보별 temperature 차등 적용 (0~1.5 범위)
+                # i=0: greedy(1.0), i=1: 1.2, i=2: 1.4
+                temps = [1.0, 1.2, 1.4]
+                temp = temps[i] if i < len(temps) else 1.4
                 raw = get_action_for_got(
                     model=self.model,
                     cur_img=ctx['cur_img'],
@@ -93,7 +97,7 @@ class GoTVLAPipelineV2:
                     his_type=self.cfg.his_type,
                     action_steps=self.cfg.segment_len,
                     do_sample=(i > 0),
-                    temperature=1.2 if i > 0 else 1.0,
+                    temperature=temp,
                     device=self.device,
                 )
                 if raw:
