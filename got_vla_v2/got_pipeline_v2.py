@@ -202,7 +202,38 @@ class GoTVLAPipelineV2:
             # Prune: 상위 beam_width개 유지
             new_nodes.sort(key=lambda n: n.path_score, reverse=True)
             beam = new_nodes[:cfg.beam_width]
-            beam_ctxs = [init_ctx] * len(beam)
+
+            # Context Update: best 후보로 obs 갱신 후 환경 복원
+            new_ctxs = []
+            for beam_node in beam:
+                try:
+                    from got_vla_v2.scoring.score_forward_dynamics import (
+                        get_env_state, set_env_state)
+                    saved = get_env_state(env)
+                    cur_obs = init_ctx['obs']
+                    for raw_action in beam_node.actions[:self.cfg.fd_n_lookahead]:
+                        action = unnorm_fn(raw_action) if unnorm_fn else raw_action
+                        cur_obs, _, done, _ = env.step(action.tolist())
+                        if done:
+                            break
+                    next_img, next_wrist = get_img_fn(cur_obs)
+                    try:
+                        next_state = norm_state_fn(cur_obs)
+                    except Exception:
+                        next_state = init_ctx['cur_state']
+                    set_env_state(env, saved)
+                    new_ctxs.append({
+                        **init_ctx,
+                        'cur_img': next_img,
+                        'wrist_img': next_wrist,
+                        'cur_state': next_state,
+                        'obs': cur_obs,
+                    })
+                except Exception as e:
+                    if cfg.verbose:
+                        print(f"  [Ctx] 업데이트 실패: {e}")
+                    new_ctxs.append(init_ctx)
+            beam_ctxs = new_ctxs
 
             if cfg.verbose:
                 for i, n in enumerate(beam):
