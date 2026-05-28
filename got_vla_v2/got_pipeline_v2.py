@@ -209,12 +209,18 @@ class GoTVLAPipelineV2:
                 try:
                     from got_vla_v2.scoring.score_forward_dynamics import (
                         get_env_state, set_env_state)
+                    # FD Score 이후 상태와 무관하게 init_ctx의 obs 기준으로 복원
                     saved = get_env_state(env)
                     cur_obs = init_ctx['obs']
+                    step_count = 0
                     for raw_action in beam_node.actions[:self.cfg.fd_n_lookahead]:
-                        action = unnorm_fn(raw_action) if unnorm_fn else raw_action
-                        cur_obs, _, done, _ = env.step(action.tolist())
-                        if done:
+                        try:
+                            action = unnorm_fn(raw_action) if unnorm_fn else raw_action
+                            cur_obs, _, done, _ = env.step(action.tolist())
+                            step_count += 1
+                            if done:
+                                break
+                        except Exception:
                             break
                     next_img, next_wrist = get_img_fn(cur_obs)
                     try:

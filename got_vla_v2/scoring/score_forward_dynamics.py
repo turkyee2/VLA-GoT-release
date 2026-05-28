@@ -13,6 +13,16 @@ def get_env_state(env):
 def set_env_state(env, state):
     if hasattr(env, "set_state"):
         env.set_state(state)
+        # done 플래그 강제 리셋 (robosuite base env)
+        if hasattr(env, "env") and hasattr(env.env, "done"):
+            env.env.done = False
+        if hasattr(env, "done"):
+            env.done = False
+        # sim forward
+        if hasattr(env, "sim"):
+            env.sim.forward()
+        elif hasattr(env, "env") and hasattr(env.env, "sim"):
+            env.env.sim.forward()
         return
     if hasattr(env, "sim") and hasattr(env.sim, "set_state_from_flattened"):
         env.sim.set_state_from_flattened(state)
@@ -71,6 +81,7 @@ def forward_dynamics_score(
 
                     if done:
                         score_sum = 10.0
+                        set_env_state(env, saved_state)
                         break
 
                 cand.score = score_sum / actual_lookahead
