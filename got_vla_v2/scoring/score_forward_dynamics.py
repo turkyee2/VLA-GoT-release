@@ -1,8 +1,18 @@
+"""
+score_forward_dynamics.py
+-------------------------
+Forward Dynamics Score: 시뮬레이터를 n_lookahead 스텝 미리 실행하여
+reward + task progress로 행동 후보를 평가한다.
+
+주의: 환경 상태 저장/복원(Save & Load)이 필요하므로
+시뮬레이터 환경에서만 동작한다. 실제 로봇에는 적용 불가.
+"""
 from __future__ import annotations
 import numpy as np
 
 
 def get_env_state(env):
+    """환경 상태를 numpy array로 저장한다."""
     if hasattr(env, "get_sim_state"):
         return env.get_sim_state()
     if hasattr(env, "sim") and hasattr(env.sim, "get_state"):
@@ -11,14 +21,15 @@ def get_env_state(env):
 
 
 def set_env_state(env, state):
+    """환경을 저장된 상태로 복원하고 done 플래그를 리셋한다."""
     if hasattr(env, "set_state"):
         env.set_state(state)
-        # done 플래그 강제 리셋 (robosuite base env)
+        # robosuite done 플래그 리셋 (terminated episode 오류 방지)
         if hasattr(env, "env") and hasattr(env.env, "done"):
             env.env.done = False
         if hasattr(env, "done"):
             env.done = False
-        # sim forward
+        # 물리 시뮬레이터 상태 동기화
         if hasattr(env, "sim"):
             env.sim.forward()
         elif hasattr(env, "env") and hasattr(env.env, "sim"):
@@ -32,6 +43,10 @@ def set_env_state(env, state):
 
 
 def compute_task_progress(obs: dict, task_description: str) -> float:
+    """
+    관측값에서 태스크 진행도를 추정한다.
+    그리퍼 상태 + end-effector 높이로 물체를 집었는지 근사 측정.
+    """
     try:
         eef_pos = obs.get("robot0_eef_pos", np.zeros(3))
         gripper_qpos = obs.get("robot0_gripper_qpos", np.zeros(2))
@@ -52,6 +67,7 @@ def forward_dynamics_score(
     unnorm_fn=None,
     verbose: bool = False,
 ) -> list:
+    """각 후보를 n_lookahead 스텝 시뮬레이션 후 score를 계산하고 환경을 복원한다."""
     if not candidates:
         return candidates
 
@@ -66,6 +82,8 @@ def forward_dynamics_score(
                 continue
 
             reward = 0.0
+            obs = current_obs
+
             try:
                 score_sum = 0.0
                 actual_lookahead = min(n_lookahead, len(cand.actions))
@@ -80,7 +98,7 @@ def forward_dynamics_score(
                     score_sum += step_weight * (reward * 0.7 + progress * 0.3)
 
                     if done:
-                        score_sum = 10.0
+                        score_sum = 10.0  # 태스크 완료 보너스
                         set_env_state(env, saved_state)
                         break
 
@@ -96,6 +114,10 @@ def forward_dynamics_score(
                 if verbose:
                     print(f"  [FD Score] 후보 {i+1} 실패: {e}")
                 cand.score = -float("inf")
+                try:
+                    set_env_state(env, saved_state)
+                except Exception:
+                    pass
 
             finally:
                 try:

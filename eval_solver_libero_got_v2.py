@@ -1,27 +1,30 @@
 """
 eval_solver_libero_got_v2.py
-─────────────────────────────────────────────────────────────────────────────
-GoT-VLA v2 평가 스크립트.
-
-변경점 (v1 대비):
-  - Score 함수 모듈화 (--score_fn 플래그로 선택)
-  - Forward Dynamics Score 추가 (환경 미리 실행)
-  - env 객체를 pipeline에 전달
-  - 버전별 결과 디렉토리 자동 구분
+────────────────────────────
+GoT-VLA 평가 스크립트. LIBERO 벤치마크에서 GoT 추론 파이프라인을 평가한다.
 
 실행 예시:
+  # baseline
+  python eval_solver_libero_got_v2.py \\
+      --resume_path /path/to/ckpts/VLA_model_256/libero_spatial \\
+      --tokenizer_path /path/to/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768 \\
+      --mode baseline --output_dir ./results/baseline
 
-  # 버전 A: baseline
-  python eval_solver_libero_got_v2.py --mode baseline ...
+  # GoT + Forward Dynamics Score (권장)
+  python eval_solver_libero_got_v2.py \\
+      --resume_path /path/to/ckpts/VLA_model_256/libero_spatial \\
+      --tokenizer_path /path/to/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768 \\
+      --mode got --score_fn forward_dynamics \\
+      --n_segments 3 --segment_len 4 --k_candidates 3 --beam_width 2 \\
+      --output_dir ./results/got_fd
 
-  # 버전 B: GoT + Forward Dynamics Score (권장)
-  python eval_solver_libero_got_v2.py --mode got --score_fn forward_dynamics ...
-
-  # 버전 B-2: BoN + Forward Dynamics Score
-  python eval_solver_libero_got_v2.py --mode bon --score_fn forward_dynamics ...
-
-  # 버전 C (서버용): GoT + World Model Score
-  python eval_solver_libero_got_v2.py --mode got --score_fn world_model ...
+  # GoT + World Model Score
+  python eval_solver_libero_got_v2.py \\
+      --resume_path /path/to/ckpts/VLA_model_256/libero_spatial \\
+      --tokenizer_path /path/to/ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768 \\
+      --mode got --score_fn world_model \\
+      --unmask_image_logits \\
+      --output_dir ./results/got_wm
 """
 
 import csv
@@ -82,7 +85,6 @@ class GoTSolverV2(PretrainSolverBase):
     @classmethod
     def get_args_parser(cls):
         parser = super().get_args_parser()
-        # 기존 인자
         parser.add_argument("--max_seq_len", default=4096, type=int)
         parser.add_argument("--mask_image_logits", default=True)
         parser.add_argument("--unmask_image_logits", action="store_false",
@@ -97,33 +99,22 @@ class GoTSolverV2(PretrainSolverBase):
         parser.add_argument("--device", default=0, type=int)
         parser.add_argument("--his", type=str,
                             default="his_2_third_view_wrist_w_state")
-        parser.add_argument("--action_steps", default=10, type=int)
+        parser.add_argument("--action_steps", default=12, type=int)
         parser.add_argument("--half", default=0, type=int)
         parser.add_argument("--resolution", default=256, type=int)
         parser.add_argument("--load_in_4bit", action="store_true", default=False)
-        parser.add_argument(
-            "--tokenizer_path", type=str,
-            default="../ckpts/models--Alpha-VLLM--Lumina-mGPT-7B-768/snapshots/"
-                    "9624463a82ea5ce814af9b561dcd08a31082c3af")
-
+        parser.add_argument("--tokenizer_path", type=str, required=True)
         # GoT 인자
         parser.add_argument("--mode", type=str, default="got",
-                            choices=["got", "bon", "baseline"])
+                            choices=["got", "baseline"])
         parser.add_argument("--score_fn", type=str, default="forward_dynamics",
                             choices=["heuristic", "forward_dynamics", "world_model"])
-        parser.add_argument("--got_version", type=str, default="v1",
-                            choices=["v1", "v2"],
-                            help="v1: ToT 방식, v2: GoT beam search 방식")
-        parser.add_argument("--beam_width", type=int, default=2,
-                            help="GoT v2: 유지할 경로 수")
         parser.add_argument("--n_segments", type=int, default=3)
         parser.add_argument("--segment_len", type=int, default=4)
         parser.add_argument("--k_candidates", type=int, default=3)
-        parser.add_argument("--fd_n_lookahead", type=int, default=2,
-                            help="Forward Dynamics: 미리 실행할 스텝 수")
-        parser.add_argument("--w_collision", type=float, default=0.6)
-        parser.add_argument("--w_consistency", type=float, default=0.4)
-        parser.add_argument("--num_trials_per_task", type=int, default=50)
+        parser.add_argument("--beam_width", type=int, default=2)
+        parser.add_argument("--fd_n_lookahead", type=int, default=2)
+        parser.add_argument("--num_trials_per_task", type=int, default=4)
         return parser
 
     def _model_func(self, init_from: str):
@@ -136,7 +127,7 @@ class GoTSolverV2(PretrainSolverBase):
                 dropout=self.args.dropout,
                 z_loss_weight=self.args.z_loss_weight,
                 quantization_config=BitsAndBytesConfig(load_in_4bit=True),
-                device_map='cpu',
+                device_map="cpu",
             )
         else:
             model = ChameleonXLLMXForConditionalGeneration_ck_action_head.from_pretrained(
@@ -146,7 +137,7 @@ class GoTSolverV2(PretrainSolverBase):
                 dropout=self.args.dropout,
                 z_loss_weight=self.args.z_loss_weight,
                 torch_dtype=torch.bfloat16,
-                device_map='cpu',
+                device_map="cpu",
             )
         return model, None
 
@@ -174,7 +165,7 @@ class GoTSolverV2(PretrainSolverBase):
             writer.writerow(["task_id", "task_description", "episode_idx",
                              "success", "n_steps", "mode", "score_fn",
                              "n_segments", "segment_len", "k_candidates",
-                             "fd_n_lookahead"])
+                             "beam_width", "fd_n_lookahead"])
 
     def _append_csv(self, task_id, task_desc, ep_idx, success, n_steps):
         args = self.args
@@ -182,7 +173,8 @@ class GoTSolverV2(PretrainSolverBase):
             writer = csv.writer(f)
             writer.writerow([task_id, task_desc, ep_idx, int(success), n_steps,
                              args.mode, args.score_fn,
-                             args.n_segments, args.segment_len, args.k_candidates,
+                             args.n_segments, args.segment_len,
+                             args.k_candidates, args.beam_width,
                              args.fd_n_lookahead])
 
     def val_libero(self):
@@ -191,85 +183,51 @@ class GoTSolverV2(PretrainSolverBase):
 
         # 모델 로드
         self.model, _ = self._model_func(args.resume_path)
-        self.model = self.model if getattr(self.args, "load_in_4bit", False) else self.model.to(DEVICE)
+        self.model = (self.model if getattr(args, "load_in_4bit", False)
+                      else self.model.to(DEVICE))
         self.model.eval()
-
-        # World Model = VLA 모델 자체 (WorldVLA는 단일 모델)
-        self.world_model = None
-        if args.score_fn == "world_model":
-            self.world_model = self.model
-            print(f"[GoT-VLA] World Model = VLA 모델 (WorldVLA 단일 모델)")
 
         item_processor = ItemProcessor(
             target_size=args.resolution,
             tokenizer=args.tokenizer_path,
         )
 
-        # GoT 설정
+        # GoT 파이프라인 설정
         got_cfg = GoTConfig(
             n_segments=args.n_segments,
             segment_len=args.segment_len,
             k_candidates=args.k_candidates,
+            beam_width=args.beam_width,
             action_steps=args.action_steps,
             his_type=args.his,
             score_fn=args.score_fn,
             fd_n_lookahead=args.fd_n_lookahead,
-            w_collision=args.w_collision,
-            w_consistency=args.w_consistency,
             verbose=True,
         )
 
-        if args.mode in ("got", "bon"):
-            # WM Score용 256x256 item_processor 별도 생성
-            wm_item_processor = ItemProcessor(
-                target_size=256,
-                tokenizer=args.tokenizer_path,
-            ) if args.score_fn == "world_model" else item_processor
+        got_pipeline = None
+        if args.mode == "got":
+            # WM Score: WorldVLA는 Action Model과 World Model이 단일 모델
+            world_model = self.model if args.score_fn == "world_model" else None
+            got_pipeline = GoTVLAPipeline(
+                model=self.model,
+                item_processor=item_processor,
+                cfg=got_cfg,
+                device=DEVICE,
+                world_model=world_model,
+            )
 
-            if getattr(args, "got_version", "v1") == "v2":
-                from got_vla_v2.got_pipeline_v2 import GoTVLAPipelineV2, GoTConfig as GoTConfigV2
-                cfg_v2 = GoTConfigV2(
-                    n_segments=args.n_segments,
-                    segment_len=args.segment_len,
-                    k_candidates=args.k_candidates,
-                    beam_width=getattr(args, "beam_width", 2),
-                    action_steps=args.action_steps,
-                    his_type=args.his,
-                    score_fn=args.score_fn,
-                    fd_n_lookahead=args.fd_n_lookahead,
-                    verbose=True,
-                )
-                got_pipeline = GoTVLAPipelineV2(
-                    model=self.model,
-                    item_processor=item_processor,
-                    cfg=cfg_v2,
-                    device=DEVICE,
-                    world_model=self.model if args.score_fn == "world_model" else None,
-                    wm_item_processor=wm_item_processor,
-                )
-            else:
-                got_pipeline = GoTVLAPipeline(
-                    model=self.model,
-                    item_processor=item_processor,
-                    cfg=got_cfg,
-                    world_model=self.world_model,
-                    device=DEVICE,
-                    wm_item_processor=wm_item_processor,
-                )
-        else:
-            got_pipeline = None
-
-        # LIBERO 설정
+        # LIBERO 벤치마크 설정
         benchmark_dict = benchmark.get_benchmark_dict()
         task_suite = benchmark_dict[args.task_suite_name]()
         num_tasks = task_suite.n_tasks
 
         print(f"\n{'='*60}")
-        print(f"[GoT-VLA v2] 실험 시작")
-        print(f"  mode:     {args.mode}")
-        print(f"  score_fn: {args.score_fn}")
-        print(f"  suite:    {args.task_suite_name}")
-        print(f"  trials:   {args.num_trials_per_task}")
+        print(f"[GoT-VLA] 실험 시작")
+        print(f"  mode:       {args.mode}")
+        print(f"  score_fn:   {args.score_fn}")
+        print(f"  suite:      {args.task_suite_name}")
+        print(f"  trials:     {args.num_trials_per_task}")
         print(f"{'='*60}\n")
 
         self._init_csv()
@@ -291,7 +249,7 @@ class GoTSolverV2(PretrainSolverBase):
             task_episodes, task_successes = 0, 0
 
             for episode_idx in tqdm.tqdm(range(args.num_trials_per_task)):
-                print(f"\n[GoT-VLA v2] Task: {task_description}")
+                print(f"\n[GoT-VLA] Task: {task_description}")
                 env.reset()
                 obs = env.set_init_state(initial_states[episode_idx])
 
@@ -310,18 +268,16 @@ class GoTSolverV2(PretrainSolverBase):
                 his_action: List[np.ndarray] = []
                 action_queue: List[np.ndarray] = []
 
-                print(f"[GoT-VLA v2] 에피소드 {task_episodes+1} 시작...")
-
                 while t < max_steps + 10:
                     try:
-                        # 워밍업
+                        # 워밍업 (10스텝)
                         if t < 10:
                             obs, reward, done, info = env.step(
                                 get_libero_dummy_action())
                             t += 1
                             continue
 
-                        # 이미지 획득
+                        # 이미지 및 상태 획득
                         img_arr = get_libero_image(obs, args.resolution)
                         wrist_arr = get_libero_image(
                             obs, args.resolution, "robot0_eye_in_hand_image")
@@ -329,7 +285,6 @@ class GoTSolverV2(PretrainSolverBase):
                         cur_wrist_img = Image.fromarray(wrist_arr)
                         replay_images.append(img_arr)
 
-                        # 상태 획득
                         state_raw = np.concatenate((
                             obs["robot0_eef_pos"],
                             quat2axisangle(obs["robot0_eef_quat"]),
@@ -337,15 +292,20 @@ class GoTSolverV2(PretrainSolverBase):
                         ))
                         state_normed = self.norm_state_min_max(state_raw)
 
-                        # ── 액션 계획 ─────────────────────────────
+                        # 액션 계획
                         if len(action_queue) == 0:
                             t_plan = time.time()
 
                             if args.mode == "got":
                                 def get_img_fn(o):
-                                    fi = Image.fromarray(get_libero_image(o, args.resolution))
-                                    wi = Image.fromarray(get_libero_image(o, args.resolution, "robot0_eye_in_hand_image"))
+                                    fi = Image.fromarray(
+                                        get_libero_image(o, args.resolution))
+                                    wi = Image.fromarray(
+                                        get_libero_image(
+                                            o, args.resolution,
+                                            "robot0_eye_in_hand_image"))
                                     return fi, wi
+
                                 def norm_state_fn(o):
                                     raw = np.concatenate((
                                         o["robot0_eef_pos"],
@@ -353,6 +313,7 @@ class GoTSolverV2(PretrainSolverBase):
                                         o["robot0_gripper_qpos"],
                                     ))
                                     return self.norm_state_min_max(raw)
+
                                 seg_done = got_pipeline.plan_and_execute(
                                     cur_img=cur_img,
                                     wrist_img=cur_wrist_img,
@@ -361,8 +322,7 @@ class GoTSolverV2(PretrainSolverBase):
                                     his_wrist_img=his_wrist_img,
                                     cur_state=state_normed,
                                     his_action=his_action,
-                                    env=env,
-                                    obs=obs,
+                                    env=env, obs=obs,
                                     unnorm_fn=self.unnorm_action_min_max,
                                     get_img_fn=get_img_fn,
                                     norm_state_fn=norm_state_fn,
@@ -372,29 +332,12 @@ class GoTSolverV2(PretrainSolverBase):
                                     replay_images_ref=replay_images,
                                 )
                                 obs = got_pipeline.last_obs
-                                # plan_and_execute가 실행한 스텝 수 반영
                                 t += got_cfg.n_segments * got_cfg.segment_len
                                 if seg_done:
                                     task_successes += 1
                                     total_successes += 1
                                     done = True
                                     break
-
-                            elif args.mode == "bon":
-                                raw_traj = got_pipeline.plan_baseline_bon(
-                                    cur_img=cur_img,
-                                    wrist_img=cur_wrist_img,
-                                    task_description=task_description,
-                                    his_img=his_img,
-                                    his_wrist_img=his_wrist_img,
-                                    cur_state=state_normed,
-                                    his_action=his_action,
-                                    env=env,
-                                    current_obs=obs,
-                                    unnorm_fn=self.unnorm_action_min_max,
-                                    k=got_cfg.k_candidates,
-                                )
-                                action_queue.extend(raw_traj)
 
                             else:  # baseline
                                 raw = get_action_Chameleon_dis_awm_ck_discrete_action(
@@ -409,16 +352,8 @@ class GoTSolverV2(PretrainSolverBase):
                                         action_queue.append(
                                             a.cpu().float().detach().numpy())
 
-                            print(f"[GoT-VLA v2] 계획 {time.time()-t_plan:.2f}초, "
-                                  f"큐={len(action_queue)}")
+                            print(f"[GoT-VLA] 계획 {time.time()-t_plan:.2f}초")
 
-                        # got 모드는 plan_and_execute가 직접 실행하므로 큐 체크 건너뜀 (t 이중누적 방지)
-                        if args.mode == "got":
-                            continue
-
-
-
-                        # got 모드는 plan_and_execute가 직접 실행하므로 큐 체크 건너뜀 (t 이중누적 방지)
                         if args.mode == "got":
                             continue
 
@@ -426,14 +361,11 @@ class GoTSolverV2(PretrainSolverBase):
                             t += 1
                             continue
 
-                        # 액션 실행
+                        # 액션 실행 (baseline)
                         raw_action = action_queue.pop(0)
                         action_unnorm = self.unnorm_action_min_max(raw_action)
-                        print(f"  action: {action_unnorm}")
-
                         obs, reward, done, info = env.step(action_unnorm.tolist())
 
-                        # 히스토리 업데이트
                         his_img = (his_img + [cur_img])[-3:]
                         his_wrist_img = (his_wrist_img + [cur_wrist_img])[-3:]
                         his_action = (his_action + [raw_action])[-3:]
@@ -445,7 +377,7 @@ class GoTSolverV2(PretrainSolverBase):
                         t += 1
 
                     except Exception as e:
-                        print(f"[GoT-VLA v2] 예외: {e}")
+                        print(f"[GoT-VLA] 예외: {e}")
                         import traceback
                         traceback.print_exc()
                         break
@@ -457,17 +389,16 @@ class GoTSolverV2(PretrainSolverBase):
                     args.output_dir, replay_images, total_episodes,
                     success=done, task_description=task_description,
                 )
-                self._append_csv(task_id, task_description,
-                                 episode_idx, done, t)
+                self._append_csv(task_id, task_description, episode_idx, done, t)
                 self.log_writer.add_scalar(
                     f"success/{task_description}", float(done), total_episodes)
 
-                print(f"[GoT-VLA v2] 성공: {done} | "
+                print(f"[GoT-VLA] 성공: {done} | "
                       f"총 {total_successes}/{total_episodes} "
                       f"({total_successes/total_episodes*100:.1f}%)")
 
             task_sr = float(task_successes) / float(task_episodes)
-            print(f"\n[GoT-VLA v2] 태스크 SR: {task_sr:.3f}")
+            print(f"\n[GoT-VLA] 태스크 SR: {task_sr:.3f}")
             self.log_writer.add_scalar(
                 f"task_sr/{args.task_suite_name}", task_sr, task_id)
 
@@ -475,9 +406,8 @@ class GoTSolverV2(PretrainSolverBase):
                     if total_episodes > 0 else 0.0)
 
         print(f"\n{'='*60}")
-        print(f"[GoT-VLA v2] 최종 결과")
+        print(f"[GoT-VLA] 최종 결과")
         print(f"  mode={args.mode}  score_fn={args.score_fn}")
-        print(f"  suite={args.task_suite_name}")
         print(f"  SR: {total_sr:.4f} ({total_successes}/{total_episodes})")
         print(f"  결과: {self.csv_path}")
         print(f"{'='*60}")

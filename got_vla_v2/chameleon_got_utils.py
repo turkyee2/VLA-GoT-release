@@ -1,16 +1,18 @@
 """
 chameleon_got_utils.py
 ----------------------
-Thin adapter around the existing Chameleon_utils functions in
-rynnvla-002/libero_util/Chameleon_utils.py.
+GoT 추론을 위한 행동 생성 유틸리티.
 
-Adds:
-  - do_sample / temperature parameters (for diverse candidate generation)
-  - A unified get_action_for_got() entry point used by got_pipeline.py
+기존 Chameleon_utils.py 대비 변경사항:
+  - do_sample / temperature 인자 추가 (후보별 다양성 제어)
+  - top_k 제거 (temperature와 역할 중복, LLaMA 가이드라인 참조)
+  - top_p=0.95 추가 (nucleus sampling, do_sample=True 시 적용)
 
-No existing files are modified. Import this alongside the original utils.
+temperature 설정:
+  i=0: 1.0 (greedy, exploitation — 가장 확률 높은 행동)
+  i=1: 1.2 (약한 탐색, ±20% 다양성)
+  i=2: 1.4 (강한 탐색, ±40% 다양성, 1.5 초과 시 품질 저하)
 """
-
 from __future__ import annotations
 
 from typing import List, Optional
@@ -22,10 +24,6 @@ from transformers import GenerationConfig
 
 
 def parse_his_type(his_type: str) -> dict:
-    """
-    Replicates the parse_his_type logic from Chameleon_utils.py.
-    Kept here so got_pipeline.py has no circular import on the original file.
-    """
     try:
         parts = his_type.split("_")
         if len(parts) < 5 or parts[0] != "his" or parts[-1] != "state":
@@ -46,7 +44,6 @@ def _build_image_list(
     cur_img: Image.Image,
     cur_wrist_img: Optional[Image.Image],
 ) -> List[Image.Image]:
-    """Build the image context list matching the original Chameleon_utils logic."""
     his_n = his_type_dict["his"]
     n_views = len(his_type_dict["views"])
 
@@ -83,16 +80,10 @@ def get_action_for_got(
     device: Optional[torch.device] = None,
 ) -> list:
     """
-    Unified action-generation entry point for GoT.
-
-    Mirrors get_action_Chameleon_dis_awm_ck_discrete_action from
-    Chameleon_utils.py but adds do_sample / temperature for diverse
-    candidate generation (needed for k > 1 in GoT Generate step).
+    GoT용 행동 생성 함수.
 
     Returns:
-        list of torch.Tensor, each shape (7,) — raw discrete action tokens
-        (same format as the original function's return value).
-        Returns [] on failure.
+        list of torch.Tensor, 각 shape (7,). 실패 시 [] 반환.
     """
     if device is None:
         device = next(model.parameters()).device
@@ -103,7 +94,6 @@ def get_action_for_got(
             his_type_dict, his_img, his_wrist_img, cur_img, cur_wrist_img
         )
 
-        # Build prompt (same as original Chameleon_utils)
         if his_type_dict["with_state"]:
             human_val = (
                 f"What action should the robot take to {task_description}?"
@@ -126,17 +116,12 @@ def get_action_for_got(
 
         tokens = item_processor.process_item(conv, training_mode=False)
 
-        # Generation config — temperature / top_k only active when do_sample=True
-        # Temperature만 사용, top_k 제거
-        # - do_sample=False (i=0): greedy, exploitation
-        # - do_sample=True  (i>0): temperature로 다양성 조절
-        # - temperature 범위 0~1.5, top_k는 temperature와 중복이므로 제거
         generation_config = GenerationConfig(
             max_new_tokens=action_steps * 12,
             max_length=model.config.max_position_embeddings,
             temperature=temperature if do_sample else 1.0,
-            top_k=None,
-            top_p=0.95 if do_sample else None,
+            top_k=None,                          # top_k 제거
+            top_p=0.95 if do_sample else None,   # nucleus sampling
             do_sample=do_sample,
             eos_token_id=[8710],
         )
@@ -148,8 +133,8 @@ def get_action_for_got(
         with torch.no_grad():
             dis_action = model.generate_dis_ma(input_ids, generation_config)
 
-        return dis_action  # list of tensors
+        return dis_action
 
     except Exception as e:
-        print(f"[chameleon_got_utils] get_action_for_got failed: {e}")
+        print(f"[chameleon_got_utils] get_action_for_got 실패: {e}")
         return []
